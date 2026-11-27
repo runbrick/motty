@@ -2421,8 +2421,8 @@ func (state *State) Scroll(event gfx.ScrollEvent) gfx.EventResult {
 	if state.modal == modalRuleManager {
 		return state.scrollRuleManager(event)
 	}
-	if state.modal == modalSnippetGroups {
-		return state.scrollSnippetGroups(event)
+	if state.modal == modalSnippetMoveGroup {
+		return state.scrollSnippetMoveGroup(event)
 	}
 	// Dialogs own the wheel even over their backdrop. Menus and scrollable
 	// dialogs above have their own handlers; nothing behind them should move.

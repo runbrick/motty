@@ -233,11 +233,12 @@ func (form *snippetsUI) refreshSnippetGroups() {
 		return 0
 	})
 	form.hasUngrouped = ungrouped
-	// A filter whose group is gone shows everything rather than nothing.
+	// A filter whose group is gone or has no matching snippets shows everything
+	// rather than nothing.
 	if filter := form.filter; filter.ungrouped && !ungrouped {
 		form.filter = snippetFilter{}
 	} else if filter.group != "" {
-		if _, ok := canonical[strings.ToLower(filter.group)]; !ok {
+		if known, ok := canonical[strings.ToLower(filter.group)]; !ok || form.groupCounts[known] == 0 {
 			form.filter = snippetFilter{}
 		}
 	}
@@ -250,6 +251,22 @@ func (form *snippetsUI) refreshSnippetGroups() {
 	if len(form.visible) > 0 && !slices.Contains(form.visible, form.selected) {
 		form.selected = form.visible[0]
 	}
+}
+
+// preserveSnippetGroup records group in customGroups so an explicit or
+// previously populated group remains visible in the tree even when its last
+// command is deleted or moved elsewhere.
+func (form *snippetsUI) preserveSnippetGroup(group string) {
+	group = cleanSnippetGroup(group)
+	if group == "" {
+		return
+	}
+	for _, existing := range form.customGroups {
+		if sameSnippetGroup(existing, group) {
+			return
+		}
+	}
+	form.customGroups = append(form.customGroups, group)
 }
 
 // showSnippet makes the page show the snippet at index, which the filter may

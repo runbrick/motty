@@ -90,20 +90,46 @@ type ToolsMessages struct {
 	SnippetGroupsDescription  string
 	SnippetGroupCountFmt      string
 	SnippetGroupEmpty         string
-	SnippetGroupRename        string
-	SnippetGroupRenameTitle   string
-	SnippetGroupRenameField   string
-	SnippetGroupRenameSave    string
+	SnippetGroupRename          string
+	SnippetGroupRenameTitle     string
+	SnippetGroupRenameField     string
+	SnippetGroupParentField     string
+	SnippetGroupParentRoot      string
+	SnippetGroupNamePlaceholder string
+	SnippetGroupRenameSave      string
 	SnippetGroupRenameInvalid string
 	SnippetGroupConflict      string
 	SnippetGroupMissing       string
-	SnippetGroupDelete        string
-	SnippetGroupDeleteTitle   string
-	SnippetGroupDeleteBodyFmt string
-	SnippetGroupDeleteConfirm string
-	SnippetGroupsClose        string
-	StatusGroupRenamedFmt     string
-	StatusGroupDeletedFmt     string
+	SnippetGroupDelete                    string
+	SnippetGroupDeleteWithSnippets        string
+	SnippetGroupDeleteTitle               string
+	SnippetGroupDeleteBodyFmt             string
+	SnippetGroupDeleteWithSnippetsTitle   string
+	SnippetGroupDeleteWithSnippetsBodyFmt string
+	SnippetGroupDeleteConfirm             string
+	SnippetGroupsClose                    string
+	StatusGroupRenamedFmt                 string
+	StatusGroupDeletedFmt                 string
+	StatusGroupDeletedWithSnippetsFmt     string
+	SnippetMoveToGroup                    string
+	SnippetMoveGroupTitle                 string
+	SnippetMoveGroupDescriptionFmt        string
+	SnippetMoveGroupRoot                  string
+	SnippetMoveGroupConfirm               string
+	StatusSnippetsMovedFmt                string
+	SnippetMultiSelect                    string
+	SnippetMultiSelectExit                string
+	SnippetMultiSelectAll                 string
+	SnippetMultiSelectedCountFmt          string
+	SnippetBatchMove                      string
+	SnippetBatchDelete                    string
+	SnippetBatchDeleteTitle             string
+	SnippetBatchDeleteBodyFmt           string
+	SnippetBatchDeleteGroupsBodyFmt     string
+	SnippetBatchDeleteMixedBodyFmt      string
+	StatusSnippetsBatchDeletedFmt       string
+	StatusSnippetsBatchDeletedGroupsFmt string
+	StatusSnippetsBatchDeletedMixedFmt  string
 	SnippetCountFilteredFmt   string
 	SnippetColumnCommand      string
 	SnippetSortAction         string

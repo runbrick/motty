@@ -3077,8 +3077,8 @@ func (state *State) declareDialogs(c ui.C) {
 		state.declareXYDialog(c)
 	case modalSnippetDelete:
 		state.declareSnippetDeleteDialog(c)
-	case modalSnippetGroups:
-		state.declareSnippetGroupsDialog(c)
+	case modalSnippetMoveGroup:
+		state.declareSnippetMoveGroupDialog(c)
 	case modalSnippetGroupRename:
 		state.declareSnippetGroupRenameDialog(c)
 	case modalSnippetGroupDelete:

@@ -73,19 +73,29 @@ var (
 	hitTerminalSnippets = tree.ID(snippetsHits, "terminal-snippets")
 
 	// Tree panel controls on the Snippets page.
-	hitSnippetTreeToggle         = tree.ID(snippetsHits, "snippet-tree-toggle")
-	hitSnippetTreeSearchToggle   = tree.ID(snippetsHits, "snippet-tree-search-toggle")
-	hitSnippetTreeSearch         = tree.ID(snippetsHits, "snippet-tree-search")
-	hitSnippetTreeExpandAll      = tree.ID(snippetsHits, "snippet-tree-expand-all")
-	hitSnippetTreeScroll         = tree.ID(snippetsHits, "snippet-tree-scroll")
-	hitSnippetFolderMenuDismiss  = tree.ID(snippetsHits, "snippet-folder-menu-dismiss")
-	hitSnippetFolderMenuAdd      = tree.ID(snippetsHits, "snippet-folder-menu-add")
-	hitSnippetFolderMenuNewChild = tree.ID(snippetsHits, "snippet-folder-menu-new-child")
-	hitSnippetFolderMenuRename   = tree.ID(snippetsHits, "snippet-folder-menu-rename")
-	hitSnippetFolderMenuDelete   = tree.ID(snippetsHits, "snippet-folder-menu-delete")
-	hitSnippetBlankMenuDismiss   = tree.ID(snippetsHits, "snippet-blank-menu-dismiss")
-	hitSnippetBlankNewGroup      = tree.ID(snippetsHits, "snippet-blank-new-group")
-	hitSnippetBlankNewSnippet    = tree.ID(snippetsHits, "snippet-blank-new-snippet")
+	hitSnippetTreeToggle                  = tree.ID(snippetsHits, "snippet-tree-toggle")
+	hitSnippetTreeMultiSelect             = tree.ID(snippetsHits, "snippet-tree-multi-select")
+	hitSnippetTreeSearchToggle            = tree.ID(snippetsHits, "snippet-tree-search-toggle")
+	hitSnippetTreeSearch                  = tree.ID(snippetsHits, "snippet-tree-search")
+	hitSnippetTreeExpandAll               = tree.ID(snippetsHits, "snippet-tree-expand-all")
+	hitSnippetTreeScroll                  = tree.ID(snippetsHits, "snippet-tree-scroll")
+	hitSnippetMultiSelectAll              = tree.ID(snippetsHits, "snippet-multi-select-all")
+	hitSnippetBatchMove                   = tree.ID(snippetsHits, "snippet-batch-move")
+	hitSnippetBatchDelete                 = tree.ID(snippetsHits, "snippet-batch-delete")
+	hitSnippetFolderMenuDismiss           = tree.ID(snippetsHits, "snippet-folder-menu-dismiss")
+	hitSnippetFolderMenuAdd               = tree.ID(snippetsHits, "snippet-folder-menu-add")
+	hitSnippetFolderMenuNewChild          = tree.ID(snippetsHits, "snippet-folder-menu-new-child")
+	hitSnippetFolderMenuRename            = tree.ID(snippetsHits, "snippet-folder-menu-rename")
+	hitSnippetFolderMenuDelete            = tree.ID(snippetsHits, "snippet-folder-menu-delete")
+	hitSnippetFolderMenuDeleteWithSnippets = tree.ID(snippetsHits, "snippet-folder-menu-delete-with-snippets")
+	hitSnippetBlankMenuDismiss            = tree.ID(snippetsHits, "snippet-blank-menu-dismiss")
+	hitSnippetBlankNewGroup               = tree.ID(snippetsHits, "snippet-blank-new-group")
+	hitSnippetBlankNewSnippet             = tree.ID(snippetsHits, "snippet-blank-new-snippet")
+	hitSnippetMoveGroupClose              = tree.ID(snippetsHits, "snippet-move-group-close")
+	hitSnippetMoveGroupCancel             = tree.ID(snippetsHits, "snippet-move-group-cancel")
+	hitSnippetMoveGroupConfirm            = tree.ID(snippetsHits, "snippet-move-group-confirm")
+	hitSnippetMoveGroupDismiss            = tree.ID(snippetsHits, "snippet-move-group-dismiss")
+	hitSnippetMoveGroupRoot               = tree.ID(snippetsHits, "snippet-move-group-root")
 
 	// Inline editor controls on the Snippets page.
 	hitSnippetInlineName         = tree.ID(snippetsHits, "snippet-inline-name")
@@ -107,6 +117,9 @@ var (
 	hitSnippetSendList           = tree.Sub(snippetsHits, tree.Name("snippet-send")) // the command palette's entries
 	hitSnippetPickList           = tree.Sub(snippetsHits, tree.Name("snippet-pick")) // + session ID: the terminals to send to
 	hitSnippetFolderMore         = tree.Sub(snippetsHits, tree.Name("snippet-folder-more"))
+	hitSnippetMultiFolderCheck   = tree.Sub(snippetsHits, tree.Name("snippet-multi-folder-check"))
+	hitSnippetMultiItemCheck     = tree.Sub(snippetsHits, tree.Name("snippet-multi-item-check"))
+	hitSnippetMoveGroupChoices   = tree.Sub(snippetsHits, tree.Name("snippet-move-group-choice"))
 	hitSnippetInlineGroupChoices = tree.Sub(snippetsHits, tree.Name("snippet-inline-group-option"))
 )
 
@@ -128,8 +141,17 @@ type snippetsUI struct {
 	// sendAt is where the menu of terminals opens from the Send button.
 	sendAt gfx.Point
 	// deleting is the snippet index plus one the delete confirmation asks about;
-	// zero means no confirmation is open.
-	deleting int
+	// zero means no confirmation is open. deletingBatch and deletingGroups hold
+	// items queued for batch deletion in multi-select mode.
+	deleting       int
+	deletingBatch  []int
+	deletingGroups []string
+
+	// Multi-select mode on the Snippets page tree.
+	multiSelect         bool
+	multiSelected       map[int]bool
+	multiSelectedGroups map[string]bool
+	moveModal           snippetMoveGroupModal
 
 	// Directory-tree browser state on the Snippets page.
 	tree                ui.TreeState
@@ -349,10 +371,103 @@ func (state *State) deleteSnippet(index int) {
 	if index < 0 || index >= len(list) {
 		return
 	}
+	removed := list[index]
+	state.snippets.preserveSnippetGroup(removed.Group)
 	state.snippets.list = append(list[:index:index], list[index+1:]...)
+	state.snippets.clearMultiSelect()
 	state.snippets.resetSnippetPreview()
 	state.refreshSnippets()
-	state.status = fmt.Sprintf(state.messages.Tools.StatusSnippetRemovedFmt, list[index].Name)
+	state.status = fmt.Sprintf(state.messages.Tools.StatusSnippetRemovedFmt, removed.Name)
+	state.save()
+}
+
+// deleteSnippetsBatch removes all selected snippets and any selected groups
+// (including their subgroups and contained snippets). Unselected groups whose
+// snippets were individually deleted remain visible as empty groups.
+func (state *State) deleteSnippetsBatch(indices []int, groups []string) {
+	form, m := &state.snippets, state.messages.Tools
+	if len(indices) == 0 && len(groups) == 0 {
+		return
+	}
+	inDeletedGroup := func(path string) bool {
+		if path == "" {
+			return false
+		}
+		for _, g := range groups {
+			if snippetGroupWithin(path, g) {
+				return true
+			}
+		}
+		return false
+	}
+	drop := make(map[int]bool, len(indices))
+	for _, index := range indices {
+		if index >= 0 && index < len(form.list) {
+			drop[index] = true
+		}
+	}
+	for index := range form.list {
+		if inDeletedGroup(form.list[index].Group) {
+			drop[index] = true
+		}
+	}
+	for index := range drop {
+		if !inDeletedGroup(form.list[index].Group) {
+			form.preserveSnippetGroup(form.list[index].Group)
+		}
+	}
+	if len(drop) > 0 {
+		kept := form.list[:0]
+		for index, entry := range form.list {
+			if !drop[index] {
+				kept = append(kept, entry)
+			}
+		}
+		form.list = kept
+	}
+	removedGroups := len(groups)
+	if len(groups) > 0 {
+		keptCustom := form.customGroups[:0]
+		for _, custom := range form.customGroups {
+			if inDeletedGroup(custom) {
+				continue
+			}
+			keptCustom = append(keptCustom, custom)
+		}
+		form.customGroups = keptCustom
+		if form.filter.group != "" && inDeletedGroup(form.filter.group) {
+			form.filter = snippetFilter{}
+		}
+		for _, g := range groups {
+			deleteCommandGroupMap(state.commands.hiddenGroups, g)
+			deleteCommandGroupMap(state.commands.collapsedGroups, g)
+			deleteCommandGroupMap(state.snippets.treeCollapsedGroups, g)
+		}
+		if state.snippets.selectedFolder != "" && inDeletedGroup(state.snippets.selectedFolder) {
+			state.snippets.selectedFolder = ""
+		}
+		if form.inline.draft && inDeletedGroup(form.inline.loadedSnap.Group) {
+			form.inline.loadedSnap.Group = ""
+		}
+	}
+	form.clearMultiSelect()
+	if len(form.list) == 0 && len(form.customGroups) == 0 {
+		form.multiSelect = false
+	}
+	form.resetSnippetPreview()
+	state.refreshSnippets()
+	if form.inline.draft {
+		state.refreshInlineGroupOptions(form.inline.loadedSnap.Group)
+		state.refreshInlineMeta(form.inline.loadedSnap)
+	}
+	switch {
+	case removedGroups > 0 && len(drop) > 0:
+		state.status = fmt.Sprintf(m.StatusSnippetsBatchDeletedMixedFmt, removedGroups, len(drop))
+	case removedGroups > 0:
+		state.status = fmt.Sprintf(m.StatusSnippetsBatchDeletedGroupsFmt, removedGroups)
+	default:
+		state.status = fmt.Sprintf(m.StatusSnippetsBatchDeletedFmt, len(drop))
+	}
 	state.save()
 }
 
@@ -364,6 +479,20 @@ func (state *State) openSnippetDelete(index int) {
 		return
 	}
 	state.snippets.deleting = index + 1
+	state.snippets.deletingBatch = nil
+	state.snippets.deletingGroups = nil
+	state.modal = modalSnippetDelete
+}
+
+// openSnippetBatchDelete asks before deleting the multi-selected snippets and/or groups.
+func (state *State) openSnippetBatchDelete(indices []int, groups []string) {
+	state.flushInlineSnippetSave()
+	if len(indices) == 0 && len(groups) == 0 {
+		return
+	}
+	state.snippets.deleting = 0
+	state.snippets.deletingBatch = append(state.snippets.deletingBatch[:0], indices...)
+	state.snippets.deletingGroups = append(state.snippets.deletingGroups[:0], groups...)
 	state.modal = modalSnippetDelete
 }
 
@@ -372,12 +501,22 @@ func (state *State) clickSnippetDeleteDialog(id gfx.ID) {
 	switch id {
 	case hitSnippetDeleteDismiss, hitSnippetDeleteClose, hitSnippetDeleteCancel:
 		state.snippets.deleting = 0
+		state.snippets.deletingBatch = nil
+		state.snippets.deletingGroups = nil
 		state.closeModal()
 	case hitSnippetDeleteConfirm:
+		batch := append([]int(nil), state.snippets.deletingBatch...)
+		groups := append([]string(nil), state.snippets.deletingGroups...)
 		index := state.snippets.deleting - 1
 		state.snippets.deleting = 0
+		state.snippets.deletingBatch = nil
+		state.snippets.deletingGroups = nil
 		state.closeModal()
-		state.deleteSnippet(index)
+		if len(batch) > 0 || len(groups) > 0 {
+			state.deleteSnippetsBatch(batch, groups)
+		} else {
+			state.deleteSnippet(index)
+		}
 	}
 }
 
@@ -520,18 +659,33 @@ func (state *State) sendSnippetOn(canvas *gfx.Canvas, id gfx.ID, index int) {
 	canvas.Consume()
 }
 
-// declareSnippetDeleteDialog asks before the page deletes a snippet.
+// declareSnippetDeleteDialog asks before the page deletes one or more snippets
+// or groups.
 func (state *State) declareSnippetDeleteDialog(c ui.C) {
 	m, form := state.messages.Tools, &state.snippets
-	name := ""
-	if form.deleting > 0 && form.deleting <= len(form.list) {
-		name = form.list[form.deleting-1].Name
+	title := m.SnippetDeleteTitle
+	description := ""
+	switch {
+	case len(form.deletingGroups) > 0 && len(form.deletingBatch) > 0:
+		title = m.SnippetBatchDeleteTitle
+		description = fmt.Sprintf(m.SnippetBatchDeleteMixedBodyFmt, len(form.deletingGroups), len(form.deletingBatch))
+	case len(form.deletingGroups) > 0:
+		title = m.SnippetBatchDeleteTitle
+		description = fmt.Sprintf(m.SnippetBatchDeleteGroupsBodyFmt, len(form.deletingGroups))
+	case len(form.deletingBatch) > 0:
+		title = m.SnippetBatchDeleteTitle
+		description = fmt.Sprintf(m.SnippetBatchDeleteBodyFmt, len(form.deletingBatch))
+	default:
+		name := ""
+		if form.deleting > 0 && form.deleting <= len(form.list) {
+			name = form.list[form.deleting-1].Name
+		}
+		description = fmt.Sprintf(m.SnippetDeleteBodyFmt, name)
 	}
-	description := fmt.Sprintf(m.SnippetDeleteBodyFmt, name)
 	viewport := dialogViewport(c)
 	height := dialogContentHeight(c.Canvas(), *c.Theme(), viewport, 480, description, 0)
 	dialog := ui.Dialog(c, ui.DialogSpec{
-		Title: m.SnippetDeleteTitle, Description: description,
+		Title: title, Description: description,
 		Width: 480, Height: height, Layer: dialogLayer,
 		Scope: dialogScope, DismissID: hitSnippetDeleteDismiss, CloseID: hitSnippetDeleteClose,
 		InitialFocusID: hitSnippetDeleteCancel,

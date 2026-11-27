@@ -573,7 +573,7 @@ const (
 	modalHighlightRule
 	modalRuleManager
 	modalSnippetDelete
-	modalSnippetGroups
+	modalSnippetMoveGroup
 	modalSnippetGroupRename
 	modalSnippetGroupDelete
 	modalSnippetVariables
@@ -1490,14 +1490,13 @@ func (state *State) closeModal() {
 		state.lockUI.error = ""
 	}
 	returnToRules := state.ruleManager.returning && (state.modal == modalHighlightRule || state.modal == modalAutofillRule || state.modal == modalDeleteRule)
-	returnToSnippetGroups := state.snippetGroups.returning && (state.modal == modalSnippetGroupRename || state.modal == modalSnippetGroupDelete)
 	returnToHost := state.modal == modalCredential && state.credentialReturn != modalNone
 	returnToHostFromVault := state.modal == modalVaultForget && state.secrets.forgetReturn != modalNone
 	if state.modal == modalRuleManager {
 		state.ruleManager = ruleManagerUI{}
 	}
-	if state.modal == modalSnippetGroups {
-		state.snippetGroups = snippetGroupsUI{}
+	if state.modal == modalSnippetMoveGroup {
+		state.snippets.moveModal = snippetMoveGroupModal{}
 	}
 	if state.modal == modalSnippetVariables {
 		state.snippetPrompt = snippetPromptState{}
@@ -1566,10 +1565,6 @@ func (state *State) closeModal() {
 		state.modal = modalRuleManager
 		state.ruleManager.returning = false
 		state.ruleManager.list = nil
-	}
-	if returnToSnippetGroups {
-		state.modal = modalSnippetGroups
-		state.snippetGroups.returning = false
 	}
 	if returnToHost {
 		state.modal = state.credentialReturn

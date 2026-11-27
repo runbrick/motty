@@ -42,9 +42,157 @@ func (state *State) refreshSnippets() {
 	}
 	form.selected = max(0, min(form.selected, len(form.list)-1))
 	form.refreshSnippetGroups()
+	form.pruneMultiSelect()
 	state.rebuildSnippetTreeRows()
 	form.syncRowSelection()
 	state.syncInlineSnippet(false)
+}
+
+func (form *snippetsUI) clearMultiSelect() {
+	clear(form.multiSelected)
+	clear(form.multiSelectedGroups)
+}
+
+func (form *snippetsUI) pruneMultiSelect() {
+	if len(form.list) == 0 && len(form.groups) == 0 {
+		form.clearMultiSelect()
+		form.multiSelect = false
+		return
+	}
+	for idx := range form.multiSelected {
+		if idx < 0 || idx >= len(form.list) {
+			delete(form.multiSelected, idx)
+		}
+	}
+	if len(form.multiSelectedGroups) > 0 {
+		valid := make(map[string]bool, len(form.groups))
+		for _, g := range form.groups {
+			valid[strings.ToLower(g)] = true
+		}
+		for key := range form.multiSelectedGroups {
+			if !valid[key] {
+				delete(form.multiSelectedGroups, key)
+			}
+		}
+	}
+}
+
+func (form *snippetsUI) selectedSnippetIndices() []int {
+	if len(form.multiSelected) == 0 {
+		return nil
+	}
+	out := make([]int, 0, len(form.multiSelected))
+	for idx, on := range form.multiSelected {
+		if on && idx >= 0 && idx < len(form.list) {
+			out = append(out, idx)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+func (form *snippetsUI) selectedSnippetGroups() []string {
+	if len(form.multiSelectedGroups) == 0 {
+		return nil
+	}
+	var out []string
+	for _, g := range form.groups {
+		if form.multiSelectedGroups[strings.ToLower(g)] {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+func (form *snippetsUI) toggleSnippetMultiItem(index int) {
+	if index < 0 || index >= len(form.list) {
+		return
+	}
+	if form.multiSelected == nil {
+		form.multiSelected = make(map[int]bool)
+	}
+	if form.multiSelected[index] {
+		delete(form.multiSelected, index)
+		for path := form.list[index].Group; path != ""; path = snippetGroupParent(path) {
+			delete(form.multiSelectedGroups, strings.ToLower(path))
+		}
+	} else {
+		form.multiSelected[index] = true
+	}
+}
+
+func (form *snippetsUI) snippetGroupCheckState(group string) (checked, mixed bool) {
+	key := strings.ToLower(group)
+	if form.multiSelectedGroups[key] {
+		return true, false
+	}
+	for i := range form.list {
+		if form.multiSelected[i] && snippetGroupWithin(form.list[i].Group, group) {
+			return false, true
+		}
+	}
+	for _, g := range form.groups {
+		if form.multiSelectedGroups[strings.ToLower(g)] && snippetGroupWithin(g, group) {
+			return false, true
+		}
+	}
+	return false, false
+}
+
+func (form *snippetsUI) toggleSnippetGroupMultiSelect(group string) {
+	if form.multiSelected == nil {
+		form.multiSelected = make(map[int]bool)
+	}
+	if form.multiSelectedGroups == nil {
+		form.multiSelectedGroups = make(map[string]bool)
+	}
+	selectAll := !form.multiSelectedGroups[strings.ToLower(group)]
+	for _, g := range form.groups {
+		if snippetGroupWithin(g, group) {
+			if selectAll {
+				form.multiSelectedGroups[strings.ToLower(g)] = true
+			} else {
+				delete(form.multiSelectedGroups, strings.ToLower(g))
+			}
+		}
+	}
+	for i := range form.list {
+		if snippetGroupWithin(form.list[i].Group, group) {
+			if selectAll {
+				form.multiSelected[i] = true
+			} else {
+				delete(form.multiSelected, i)
+			}
+		}
+	}
+	if !selectAll {
+		for path := snippetGroupParent(group); path != ""; path = snippetGroupParent(path) {
+			delete(form.multiSelectedGroups, strings.ToLower(path))
+		}
+	}
+}
+
+func (form *snippetsUI) toggleAllSnippetMultiSelect() {
+	total := len(form.list) + len(form.groups)
+	if total == 0 {
+		return
+	}
+	if form.multiSelected == nil {
+		form.multiSelected = make(map[int]bool)
+	}
+	if form.multiSelectedGroups == nil {
+		form.multiSelectedGroups = make(map[string]bool)
+	}
+	if len(form.selectedSnippetIndices())+len(form.selectedSnippetGroups()) == total {
+		form.clearMultiSelect()
+		return
+	}
+	for i := range form.list {
+		form.multiSelected[i] = true
+	}
+	for _, g := range form.groups {
+		form.multiSelectedGroups[strings.ToLower(g)] = true
+	}
 }
 
 // snippetsSectionUI is what the snippets page's declaration leaves for its
@@ -266,7 +414,7 @@ func (state *State) snippetTreeExpandAncestors(group string) {
 
 func (state *State) snippetTreeCanDrop(from, to int, where ui.TreeDrop) bool {
 	form := &state.snippets
-	if state.activeSection != sectionSnippets || state.modal != modalNone || strings.TrimSpace(form.treeSearch.String()) != "" {
+	if state.activeSection != sectionSnippets || state.modal != modalNone || form.multiSelect || strings.TrimSpace(form.treeSearch.String()) != "" {
 		return false
 	}
 	rows := form.treeRows
@@ -277,8 +425,11 @@ func (state *State) snippetTreeCanDrop(from, to int, where ui.TreeDrop) bool {
 	if !src.folder {
 		switch where {
 		case ui.TreeDropInside:
-			return dst.folder
+			return dst.folder && !sameSnippetGroup(src.group, dst.group)
 		case ui.TreeDropBefore, ui.TreeDropAfter:
+			if dst.folder {
+				return !sameSnippetGroup(src.group, snippetGroupParent(dst.group))
+			}
 			return true
 		}
 		return false
@@ -376,6 +527,7 @@ func (state *State) dropSnippetTreeRow(move ui.TreeMove) {
 		if sameSnippetGroup(form.list[srcIdx].Group, destGroup) {
 			return
 		}
+		form.preserveSnippetGroup(form.list[srcIdx].Group)
 		form.list[srcIdx].Group = destGroup
 		form.selected = srcIdx
 		state.snippetTreeExpandAncestors(destGroup)
@@ -390,6 +542,9 @@ func (state *State) dropSnippetTreeRow(move ui.TreeMove) {
 		return
 	}
 	entry := form.list[srcIdx]
+	if !sameSnippetGroup(entry.Group, form.list[dstIdx].Group) {
+		form.preserveSnippetGroup(entry.Group)
+	}
 	entry.Group = form.list[dstIdx].Group
 	to := dstIdx
 	if move.Where == ui.TreeDropAfter {
@@ -435,11 +590,45 @@ func (state *State) clickSnippetsPage(id gfx.ID) bool {
 		}
 		return true
 	}
+	if id.Scope() == hitSnippetMultiFolderCheck {
+		token := item(id)
+		for _, row := range form.treeRows {
+			if row.folder && state.snippetTreeFolderToken(row.groupKey) == token {
+				form.toggleSnippetGroupMultiSelect(row.group)
+				return true
+			}
+		}
+		return true
+	}
+	if id.Scope() == hitSnippetMultiItemCheck {
+		form.toggleSnippetMultiItem(item(id))
+		return true
+	}
 	switch id {
 	case hitSnippetAdd:
 		state.startInlineSnippetDraft(form.selectedFolder)
-	case hitSnippetGroups:
-		state.openSnippetGroupsManager()
+	case hitSnippetTreeMultiSelect:
+		state.flushInlineSnippetSave()
+		if len(form.list) == 0 && len(form.groups) == 0 {
+			form.multiSelect = false
+			form.clearMultiSelect()
+			return true
+		}
+		form.multiSelect = !form.multiSelect
+		form.clearMultiSelect()
+		form.resetSnippetPreview()
+	case hitSnippetMultiSelectAll:
+		form.toggleAllSnippetMultiSelect()
+	case hitSnippetBatchMove:
+		if indices := form.selectedSnippetIndices(); len(indices) > 0 {
+			state.openSnippetMoveGroup(indices)
+		}
+	case hitSnippetBatchDelete:
+		indices := form.selectedSnippetIndices()
+		groups := form.selectedSnippetGroups()
+		if len(indices) > 0 || len(groups) > 0 {
+			state.openSnippetBatchDelete(indices, groups)
+		}
 	case hitSnippetSend:
 		if form.inline.draft {
 			return true
@@ -549,7 +738,7 @@ func (state *State) declareSnippetsWorkspace(c ui.C) {
 	}
 	view.draw = draw
 
-	if len(form.list) == 0 && !form.inline.draft {
+	if len(form.list) == 0 && len(form.groups) == 0 && !form.inline.draft {
 		body := ui.Column(c).Fill().PadSides(12, 18, 0, 18)
 		body.Children(func() {
 			ui.Row(c).MinHeight(58).Gap(10).MarginSides(0, 0, 12, 0).Items(ui.Start).Children(func() {
@@ -557,8 +746,6 @@ func (state *State) declareSnippetsWorkspace(c ui.C) {
 					ui.Text(c, m.SnippetsTitle).FontSize(18).Weight(gfx.WeightSemibold).Color(pal.text).Ellipsis()
 					ui.Paragraph(c, m.SnippetsPageDescription, 2).FontSize(metrics.FontSizeS).Color(pal.muted)
 				})
-				addWidth := toolbarButtonWidth(c.Canvas(), m.SnippetAdd, true)
-				state.declareButtonSized(c, hitSnippetAdd, m.SnippetAdd, iconPlus, true, false, true, toolbarFont, false).Size(addWidth, toolbarHeight)
 			})
 			view.empty = state.reserveEmptyPage(c, bounds, m.SnippetEmpty, m.SnippetEmptySub, m.SnippetAdd, hitSnippetAdd, iconSnippets, true)
 		})
@@ -613,6 +800,27 @@ func (state *State) declareSnippetsDrawer(c ui.C, width, boundsWidth float32) {
 	}
 }
 
+func (state *State) declareSnippetMultiSelectButton(c ui.C) {
+	form, m, pal := &state.snippets, state.messages.Tools, state.pal
+	label := m.SnippetMultiSelect
+	if form.multiSelect {
+		label = m.SnippetMultiSelectExit
+	}
+	if form.multiSelect {
+		btn := ui.ButtonBase(c, label).Radius(radius.control).Size(28, 28).Shrink(0).
+			Background(withAlpha(pal.accent, 0.16)).
+			Hover(ui.Look{}.Background(withAlpha(pal.accent, 0.24))).
+			Pressed(ui.Look{}.Background(withAlpha(pal.accent, 0.30))).
+			Focus(ui.Look{}.Ring(1.5, withAlpha(pal.accent, 0.5))).
+			Hit(hitSnippetTreeMultiSelect, label)
+		btn.Children(func() {
+			ui.Icon(c, icons.CircleCheck).Size(15, 15).Color(pal.accent)
+		})
+		return
+	}
+	state.declareNoteToolbarButton(c, hitSnippetTreeMultiSelect, label, icons.CircleCheck, len(form.list) == 0 && len(form.groups) == 0)
+}
+
 func (state *State) declareSnippetsTree(c ui.C, width float32) {
 	form, m := &state.snippets, state.messages.Tools
 	view := &state.sectionBodies.snippets
@@ -625,14 +833,31 @@ func (state *State) declareSnippetsTree(c ui.C, width float32) {
 	searching := form.treeSearching
 	ui.Row(c).Height(28).MarginSides(8, 8, 0, 8).Gap(2).Items(ui.Center).Children(func() {
 		ui.Text(c, m.SnippetsTitle).FontSize(13).Weight(gfx.WeightSemibold).Color(state.pal.text).Grow(1).Ellipsis().MarginSides(0, 4, 0, 4)
+		state.declareSnippetMultiSelectButton(c)
 		state.declareNoteToolbarButton(c, hitSnippetTreeSearchToggle, m.SnippetTreeSearch, icons.Search, false)
 		state.declareNoteToolbarButton(c, hitSnippetTreeExpandAll, expandLabel, expandIcon, len(form.groups) == 0 || searching)
-		state.declareNoteToolbarButton(c, hitSnippetGroups, m.SnippetGroupsManage, icons.FolderOpen, len(form.groups) == 0)
 	})
-	addBtn := ui.Button(c, m.SnippetAdd).Icon(lucideIcons[iconPlus]).
-		FillWidth().Height(34).MarginSides(8, 8, 0, 8).Hit(hitSnippetAdd, m.SnippetAdd)
-	if len(form.list) >= maxSnippets {
-		addBtn.Disabled(true)
+	if form.multiSelect {
+		selectedSnippets := len(form.selectedSnippetIndices())
+		selectedGroups := len(form.selectedSnippetGroups())
+		ui.Row(c).Height(34).MarginSides(8, 8, 0, 8).Gap(6).Items(ui.Center).Children(func() {
+			moveBtn := ui.Button(c, m.SnippetBatchMove).Icon(lucideIcons[iconFolderOpen]).Outline().
+				Grow(1).Height(30).Hit(hitSnippetBatchMove, m.SnippetBatchMove)
+			if selectedSnippets == 0 {
+				moveBtn.Disabled(true)
+			}
+			delBtn := ui.Button(c, m.SnippetBatchDelete).Icon(lucideIcons[iconTrash]).Destructive().
+				Grow(1).Height(30).Hit(hitSnippetBatchDelete, m.SnippetBatchDelete)
+			if selectedSnippets == 0 && selectedGroups == 0 {
+				delBtn.Disabled(true)
+			}
+		})
+	} else {
+		addBtn := ui.Button(c, m.SnippetAdd).Icon(lucideIcons[iconPlus]).
+			FillWidth().Height(34).MarginSides(8, 8, 0, 8).Hit(hitSnippetAdd, m.SnippetAdd)
+		if len(form.list) >= maxSnippets {
+			addBtn.Disabled(true)
+		}
 	}
 	if form.treeSearchOpen {
 		if !form.treeSearchBound {
@@ -661,10 +886,28 @@ func (state *State) declareSnippetsTree(c ui.C, width float32) {
 		view.tree = ui.Tree(c, &form.tree, len(form.treeRows), form.treeLabel, form.treeContent).
 			Grow(1).FillWidth().Scrollbars().Label(m.SnippetListScroll)
 		state.snippetTreeChanges()
-		state.openSnippetBlankMenuOn(c.Canvas(), hitSnippetTreeScroll)
+		if !form.multiSelect {
+			state.openSnippetBlankMenuOn(c.Canvas(), hitSnippetTreeScroll)
+		}
 	})
 	ui.Divider(c).Height(1).Background(state.pal.line)
-	ui.Row(c).Height(32).PadSides(0, 10, 0, 12).Items(ui.Center).Children(func() {
+	ui.Row(c).Height(32).PadSides(0, 10, 0, 12).Gap(8).Items(ui.Center).Children(func() {
+		if form.multiSelect {
+			selectedCount := len(form.selectedSnippetIndices()) + len(form.selectedSnippetGroups())
+			total := len(form.list) + len(form.groups)
+			box := ui.Checkbox(c, state.pageFlag(total > 0 && selectedCount == total), "").Hit(hitSnippetMultiSelectAll, m.SnippetMultiSelectAll).Shrink(0)
+			if selectedCount > 0 && selectedCount < total {
+				box.Mixed(true)
+			}
+			if total == 0 {
+				box.Disabled(true)
+			}
+			ui.Text(c, m.SnippetMultiSelectAll).FontSize(metrics.FontSizeS).Color(state.pal.text).Shrink(0).
+				HitWith(hitSnippetMultiSelectAll, m.SnippetMultiSelectAll, gfx.HitOptions{Role: gfx.RoleCheckbox, Selected: total > 0 && selectedCount == total})
+			ui.Spacer(c).Grow(1)
+			ui.Text(c, fmt.Sprintf(m.SnippetMultiSelectedCountFmt, selectedCount, total)).FontSize(metrics.FontSizeS).Weight(gfx.WeightMedium).Color(state.pal.faint).Shrink(0)
+			return
+		}
 		ui.Text(c, form.countText).FontSize(metrics.FontSizeS).Weight(gfx.WeightMedium).Color(state.pal.faint).Grow(1).Ellipsis()
 	})
 }
@@ -680,6 +923,14 @@ func (state *State) snippetTreeChanges() {
 	}
 	if i, ok := form.tree.Chosen(); ok && i >= 0 && i < len(rows) {
 		e := rows[i]
+		if form.multiSelect {
+			if e.folder {
+				form.toggleSnippetGroupMultiSelect(e.group)
+			} else if e.snippet >= 0 && e.snippet < len(form.list) {
+				form.toggleSnippetMultiItem(e.snippet)
+			}
+			return
+		}
 		if e.folder {
 			state.flushInlineSnippetSave()
 			form.selectedFolder = e.group
@@ -715,6 +966,29 @@ func (state *State) toggleSnippetTreeFolder(groupKey string) {
 	state.rebuildSnippetTreeRows()
 }
 
+func (state *State) declareSnippetMultiCheck(c ui.C, checked, mixed, disabled bool) {
+	pal := state.pal
+	bg := pal.surface
+	border := pal.line
+	if checked || mixed {
+		bg = pal.accent
+		border = pal.accent
+	}
+	if disabled {
+		bg = pal.surfaceSoft
+		border = withAlpha(pal.line, 0.6)
+	}
+	ui.Row(c).Size(15, 15).Shrink(0).Center().Radius(4).Background(bg).Border(1.25, border).Children(func() {
+		fg := c.Theme().PrimaryForeground
+		switch {
+		case checked:
+			ui.Icon(c, icons.Check).Size(11, 11).Color(fg)
+		case mixed:
+			ui.Icon(c, icons.Minus).Size(11, 11).Color(fg)
+		}
+	})
+}
+
 func (state *State) declareSnippetTreeRow(i int) {
 	form := &state.snippets
 	rows := form.treeRows
@@ -737,9 +1011,13 @@ func (state *State) declareSnippetTreeRow(i int) {
 		moreID := hitSnippetFolderMore.At(token)
 		menuOpen := form.folderMenu.open && sameSnippetGroup(form.folderMenu.group, e.group)
 		ui.Row(c).Gap(4).FillWidth().Items(ui.Center).PadSides(0, 4, 0, 2).Children(func() {
+			if form.multiSelect {
+				checked, mixed := form.snippetGroupCheckState(e.group)
+				state.declareSnippetMultiCheck(c, checked, mixed, false)
+			}
 			ui.Icon(c, icon).Size(15, 15).Color(state.pal.muted).Shrink(0)
 			ui.Text(c, e.label).FontSize(13).Weight(gfx.WeightMedium).Color(state.pal.text).Grow(1).Ellipsis()
-			if hovered || focused || menuOpen || canvas.Hovered() == moreID {
+			if !form.multiSelect && (hovered || focused || menuOpen || canvas.Hovered() == moreID) {
 				btn := state.noteIconButton(c, moreID, icons.Ellipsis, state.messages.Tools.SnippetFolderMore, 24, true)
 				if event, ok := canvas.PointerOn(moreID); ok && event.Kind == gfx.PointerDown {
 					form.folderMenu.at = gfx.Point{X: event.X, Y: event.Y}
@@ -750,20 +1028,27 @@ func (state *State) declareSnippetTreeRow(i int) {
 				ui.Text(c, e.countText).FontSize(11).Color(state.pal.faint).Shrink(0).PadSides(0, 4, 0, 4)
 			}
 		})
-		state.openSnippetFolderMenuOn(canvas, rowID, e.group)
+		if !form.multiSelect {
+			state.openSnippetFolderMenuOn(canvas, rowID, e.group)
+		}
 		return
 	}
 
 	entry := &form.list[e.snippet]
 	ui.Row(c).Gap(6).FillWidth().Items(ui.Center).PadSides(0, 6, 0, 2).Children(func() {
+		if form.multiSelect {
+			state.declareSnippetMultiCheck(c, form.multiSelected[e.snippet], false, false)
+		}
 		ui.Icon(c, lucideIcons[iconSnippets]).Size(14, 14).Color(state.pal.muted).Shrink(0)
 		ui.Text(c, e.label).FontSize(13).Color(state.pal.text).Grow(1).Ellipsis()
 		if entry.Shortcut.Valid() {
 			ui.Text(c, entry.cells[2]).FontSize(11).Color(state.pal.faint).Shrink(0)
 		}
 	})
-	state.sendSnippetOn(canvas, rowID, e.snippet)
-	state.openSnippetMenuOn(canvas, rowID, e.snippet)
+	if !form.multiSelect {
+		state.sendSnippetOn(canvas, rowID, e.snippet)
+		state.openSnippetMenuOn(canvas, rowID, e.snippet)
+	}
 }
 
 func (state *State) openSnippetFolderMenuOn(canvas *gfx.Canvas, id gfx.ID, group string) {
@@ -796,6 +1081,7 @@ func (state *State) declareSnippetFolderMenu(c ui.C) {
 	rows.separate()
 	rows.add(components.ContextMenuItem{ID: hitSnippetFolderMenuRename, Label: m.SnippetGroupRename, Icon: icon(iconPencil)})
 	rows.add(components.ContextMenuItem{ID: hitSnippetFolderMenuDelete, Label: m.SnippetGroupDelete, Icon: icon(iconTrash), Variant: components.ContextMenuItemDestructive})
+	rows.add(components.ContextMenuItem{ID: hitSnippetFolderMenuDeleteWithSnippets, Label: m.SnippetGroupDeleteWithSnippets, Icon: icon(iconTrash), Variant: components.ContextMenuItemDestructive})
 	state.declareRowsMenu(c, &menu.open, menu.at, hitSnippetFolderMenuDismiss, &rows, state.chooseSnippetFolderMenu)
 }
 
@@ -808,11 +1094,13 @@ func (state *State) chooseSnippetFolderMenu(id gfx.ID) {
 	case hitSnippetFolderMenuAdd:
 		state.startInlineSnippetDraft(group)
 	case hitSnippetFolderMenuNewChild:
-		state.openSnippetGroupCreate(group + "/")
+		state.openSnippetGroupCreate(group)
 	case hitSnippetFolderMenuRename:
 		state.openSnippetGroupRenameDirect(group)
 	case hitSnippetFolderMenuDelete:
 		state.openSnippetGroupDeleteDirect(group)
+	case hitSnippetFolderMenuDeleteWithSnippets:
+		state.openSnippetGroupDeleteWithSnippets(group)
 	}
 }
 
@@ -887,6 +1175,12 @@ func (state *State) declareSnippetInlineEditor(c ui.C, width float32, narrow boo
 		entry = &inline.loadedSnap
 	} else {
 		if form.selected < 0 || form.selected >= len(form.list) {
+			ui.Row(c).Height(44).FillWidth().PadSides(6, 16, 6, 12).Gap(8).Items(ui.Center).Children(func() {
+				state.declareNoteToolbarButton(c, hitSnippetTreeToggle, m.SnippetTreeToggle, icons.PanelLeft, false)
+				ui.Text(c, m.SnippetsTitle).FontSize(13).Weight(gfx.WeightMedium).Color(pal.muted).Grow(1).Ellipsis()
+			})
+			ui.Divider(c).Height(1).Background(pal.line)
+			view.empty = state.reserveEmptyPage(c, state.catalogSectionBounds(), m.SnippetEmpty, m.SnippetEmptySub, m.SnippetAdd, hitSnippetAdd, iconSnippets, true)
 			return
 		}
 		entry = &form.list[form.selected]
@@ -994,7 +1288,7 @@ func (state *State) paintSnippetsWorkspace(canvas *gfx.Canvas) {
 	if view.send.Valid() {
 		form.sendAt = gfx.Point{X: view.send.Rect().X, Y: view.send.Rect().Y + toolbarHeight + 4}
 	}
-	if len(form.list) == 0 && !form.inline.draft {
+	if view.empty.Valid() && len(form.list) == 0 && !form.inline.draft {
 		state.drawReservedEmptyPage(canvas, view.empty, iconSnippets)
 	}
 }
@@ -1200,7 +1494,7 @@ func (state *State) syncInlineSnippet(force bool) {
 func (state *State) refreshInlineMeta(entry snippet) {
 	inline := &state.snippets.inline
 	if entry.Group != "" {
-		inline.breadcrumb = entry.Group
+		inline.breadcrumb = state.snippetGroupBreadcrumb(entry.Group)
 	} else {
 		inline.breadcrumb = state.messages.Tools.SnippetFilterNone
 	}
@@ -1234,7 +1528,7 @@ func (state *State) initInlineGroupPicker(value string) {
 	control := &state.snippets.inline.groupPicker
 	control.AllowCreate = true
 	control.MatchCaseInsensitive = true
-	control.Separator = "/"
+	control.Separator = ""
 	control.SetValidateCreate(validSnippetGroup)
 	state.refreshInlineGroupOptions(value)
 	control.SetValue(value)
@@ -1245,7 +1539,35 @@ func (state *State) refreshInlineGroupOptions(value string) {
 	control := &state.snippets.inline.groupPicker
 	options := make([]components.SingleSelectOption, len(state.snippets.groups))
 	for i, group := range state.snippets.groups {
-		options[i] = components.SingleSelectOption{Value: group}
+		depth := min(int(snippetGroupDepth(group)), 6)
+		leaf := snippetGroupLeaf(group)
+		breadcrumb := state.snippetGroupBreadcrumb(group)
+		options[i] = components.SingleSelectOption{
+			Value: group,
+			Label: breadcrumb,
+			Content: components.SingleSelectPaint{
+				Paint: func(canvas *gfx.Canvas, bounds gfx.Rect, theme gfx.Theme) {
+					searching := control.Query.RuneCount() > 0
+					indent := float32(0)
+					text := breadcrumb
+					if !searching {
+						indent = float32(depth) * 18
+						text = leaf
+					}
+					x := bounds.X + indent
+					const iconSize = float32(14)
+					canvas.DrawIcon(icons.FolderSolid, gfx.Rect{
+						X: x, Y: bounds.Y + (bounds.Height-iconSize)/2,
+						Width: iconSize, Height: iconSize,
+					}, theme.MutedForeground)
+					x += iconSize + 8
+					w := max(0, bounds.X+bounds.Width-x)
+					canvas.LabelEllipsis(text, gfx.Rect{
+						X: x, Y: bounds.Y, Width: w, Height: bounds.Height,
+					}, gfx.TextStyle{Size: theme.Metrics.FontSizeM, Color: theme.Foreground}, gfx.ID{})
+				},
+			},
+		}
 	}
 	control.SetOptions(options)
 	if !control.Open && strings.TrimSpace(control.Query.String()) == "" && control.Value() != value {
@@ -1439,7 +1761,11 @@ func (state *State) applyInlineSnippetGroup() {
 	if sameSnippetGroup(form.list[form.selected].Group, nextGroup) && form.list[form.selected].Group == nextGroup {
 		return
 	}
+	form.preserveSnippetGroup(form.list[form.selected].Group)
 	form.list[form.selected].Group = nextGroup
+	if nextGroup != "" {
+		form.preserveSnippetGroup(nextGroup)
+	}
 	inline.loadedSnap.Group = nextGroup
 	form.selectedFolder = nextGroup
 	state.snippetTreeExpandAncestors(nextGroup)
