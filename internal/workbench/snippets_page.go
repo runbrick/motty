@@ -620,8 +620,10 @@ func (state *State) clickSnippetsPage(id gfx.ID) bool {
 	case hitSnippetMultiSelectAll:
 		form.toggleAllSnippetMultiSelect()
 	case hitSnippetBatchMove:
-		if indices := form.selectedSnippetIndices(); len(indices) > 0 {
-			state.openSnippetMoveGroup(indices)
+		if len(form.selectedSnippetGroups()) == 0 {
+			if indices := form.selectedSnippetIndices(); len(indices) > 0 {
+				state.openSnippetMoveGroup(indices)
+			}
 		}
 	case hitSnippetBatchDelete:
 		indices := form.selectedSnippetIndices()
@@ -843,7 +845,7 @@ func (state *State) declareSnippetsTree(c ui.C, width float32) {
 		ui.Row(c).Height(34).MarginSides(8, 8, 0, 8).Gap(6).Items(ui.Center).Children(func() {
 			moveBtn := ui.Button(c, m.SnippetBatchMove).Icon(lucideIcons[iconFolderOpen]).Outline().
 				Grow(1).Height(30).Hit(hitSnippetBatchMove, m.SnippetBatchMove)
-			if selectedSnippets == 0 {
+			if selectedSnippets == 0 || selectedGroups > 0 {
 				moveBtn.Disabled(true)
 			}
 			delBtn := ui.Button(c, m.SnippetBatchDelete).Icon(lucideIcons[iconTrash]).Destructive().
@@ -966,29 +968,6 @@ func (state *State) toggleSnippetTreeFolder(groupKey string) {
 	state.rebuildSnippetTreeRows()
 }
 
-func (state *State) declareSnippetMultiCheck(c ui.C, checked, mixed, disabled bool) {
-	pal := state.pal
-	bg := pal.surface
-	border := pal.line
-	if checked || mixed {
-		bg = pal.accent
-		border = pal.accent
-	}
-	if disabled {
-		bg = pal.surfaceSoft
-		border = withAlpha(pal.line, 0.6)
-	}
-	ui.Row(c).Size(15, 15).Shrink(0).Center().Radius(4).Background(bg).Border(1.25, border).Children(func() {
-		fg := c.Theme().PrimaryForeground
-		switch {
-		case checked:
-			ui.Icon(c, icons.Check).Size(11, 11).Color(fg)
-		case mixed:
-			ui.Icon(c, icons.Minus).Size(11, 11).Color(fg)
-		}
-	})
-}
-
 func (state *State) declareSnippetTreeRow(i int) {
 	form := &state.snippets
 	rows := form.treeRows
@@ -1013,7 +992,8 @@ func (state *State) declareSnippetTreeRow(i int) {
 		ui.Row(c).Gap(4).FillWidth().Items(ui.Center).PadSides(0, 4, 0, 2).Children(func() {
 			if form.multiSelect {
 				checked, mixed := form.snippetGroupCheckState(e.group)
-				state.declareSnippetMultiCheck(c, checked, mixed, false)
+				ui.Checkbox(c, state.pageFlag(checked), "").Mixed(mixed).HitExact().Size(16, 16).Shrink(0).
+					Hit(hitSnippetMultiFolderCheck.At(token), e.label)
 			}
 			ui.Icon(c, icon).Size(15, 15).Color(state.pal.muted).Shrink(0)
 			ui.Text(c, e.label).FontSize(13).Weight(gfx.WeightMedium).Color(state.pal.text).Grow(1).Ellipsis()
@@ -1037,7 +1017,8 @@ func (state *State) declareSnippetTreeRow(i int) {
 	entry := &form.list[e.snippet]
 	ui.Row(c).Gap(6).FillWidth().Items(ui.Center).PadSides(0, 6, 0, 2).Children(func() {
 		if form.multiSelect {
-			state.declareSnippetMultiCheck(c, form.multiSelected[e.snippet], false, false)
+			ui.Checkbox(c, state.pageFlag(form.multiSelected[e.snippet]), "").HitExact().Size(16, 16).Shrink(0).
+				Hit(hitSnippetMultiItemCheck.At(e.snippet), e.label)
 		}
 		ui.Icon(c, lucideIcons[iconSnippets]).Size(14, 14).Color(state.pal.muted).Shrink(0)
 		ui.Text(c, e.label).FontSize(13).Color(state.pal.text).Grow(1).Ellipsis()
@@ -1528,7 +1509,7 @@ func (state *State) initInlineGroupPicker(value string) {
 	control := &state.snippets.inline.groupPicker
 	control.AllowCreate = true
 	control.MatchCaseInsensitive = true
-	control.Separator = ""
+	control.Separator = "/"
 	control.SetValidateCreate(validSnippetGroup)
 	state.refreshInlineGroupOptions(value)
 	control.SetValue(value)
@@ -1539,35 +1520,7 @@ func (state *State) refreshInlineGroupOptions(value string) {
 	control := &state.snippets.inline.groupPicker
 	options := make([]components.SingleSelectOption, len(state.snippets.groups))
 	for i, group := range state.snippets.groups {
-		depth := min(int(snippetGroupDepth(group)), 6)
-		leaf := snippetGroupLeaf(group)
-		breadcrumb := state.snippetGroupBreadcrumb(group)
-		options[i] = components.SingleSelectOption{
-			Value: group,
-			Label: breadcrumb,
-			Content: components.SingleSelectPaint{
-				Paint: func(canvas *gfx.Canvas, bounds gfx.Rect, theme gfx.Theme) {
-					searching := control.Query.RuneCount() > 0
-					indent := float32(0)
-					text := breadcrumb
-					if !searching {
-						indent = float32(depth) * 18
-						text = leaf
-					}
-					x := bounds.X + indent
-					const iconSize = float32(14)
-					canvas.DrawIcon(icons.FolderSolid, gfx.Rect{
-						X: x, Y: bounds.Y + (bounds.Height-iconSize)/2,
-						Width: iconSize, Height: iconSize,
-					}, theme.MutedForeground)
-					x += iconSize + 8
-					w := max(0, bounds.X+bounds.Width-x)
-					canvas.LabelEllipsis(text, gfx.Rect{
-						X: x, Y: bounds.Y, Width: w, Height: bounds.Height,
-					}, gfx.TextStyle{Size: theme.Metrics.FontSizeM, Color: theme.Foreground}, gfx.ID{})
-				},
-			},
-		}
+		options[i] = components.SingleSelectOption{Value: group}
 	}
 	control.SetOptions(options)
 	if !control.Open && strings.TrimSpace(control.Query.String()) == "" && control.Value() != value {

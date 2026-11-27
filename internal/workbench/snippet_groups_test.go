@@ -471,14 +471,10 @@ func TestNestedSnippetGroupPathsNormalizeMaterializeAndFilterDescendants(t *test
 		t.Fatalf("leaf filter visible = %v, want [0]", form.visible)
 	}
 
-	// The inline editor's group picker displays nested groups in a single
-	// indented dropdown (no cascading fly-outs) with breadcrumb labels.
+	// The inline editor's group picker uses "/" hierarchy navigation like hosts.
 	state.initInlineGroupPicker("Clients/Acme/Production")
-	if state.snippets.inline.groupPicker.Separator != "" {
-		t.Fatalf("snippet group picker separator = %q, want empty", state.snippets.inline.groupPicker.Separator)
-	}
-	if got := state.snippets.inline.groupPicker.Label("Clients/Acme/Production"); got != "Clients  ›  Acme  ›  Production" {
-		t.Fatalf("snippet group picker label = %q, want breadcrumb", got)
+	if state.snippets.inline.groupPicker.Separator != "/" {
+		t.Fatalf("snippet group picker separator = %q, want /", state.snippets.inline.groupPicker.Separator)
 	}
 }
 

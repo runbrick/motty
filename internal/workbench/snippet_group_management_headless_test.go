@@ -122,7 +122,9 @@ func TestSnippetTreeDirectGroupActionsAndMultiSelectHeadless(t *testing.T) {
 		t.Fatalf("native rename left %+v", state.snippets.list)
 	}
 
-	// Toggle multi-select, click Prod group row, open batch move dialog.
+	// Toggle multi-select, verify group selection disables batch move, then
+	// select the two commands directly via their ui.Checkbox controls and move
+	// them to root.
 	click(hitSnippetTreeMultiSelect)
 	clean("multi-select mode")
 	prodRowIdx := -1
@@ -136,9 +138,13 @@ func TestSnippetTreeDirectGroupActionsAndMultiSelectHeadless(t *testing.T) {
 		t.Fatalf("Prod folder row not found in %+v", state.snippets.treeRows)
 	}
 	click(state.snippets.tree.RowID(prodRowIdx))
-	if len(state.snippets.selectedSnippetIndices()) != 2 {
-		t.Fatalf("expected 2 selected snippets in Prod, got %v", state.snippets.selectedSnippetIndices())
+	if len(state.snippets.selectedSnippetIndices()) != 2 || len(state.snippets.selectedSnippetGroups()) != 1 {
+		t.Fatalf("expected 2 selected snippets and 1 group in Prod, got snippets=%v groups=%v", state.snippets.selectedSnippetIndices(), state.snippets.selectedSnippetGroups())
 	}
+	// Deselect Prod group, then check both commands individually.
+	click(hitSnippetMultiFolderCheck.At(state.snippetTreeFolderToken("prod")))
+	click(hitSnippetMultiItemCheck.At(0))
+	click(hitSnippetMultiItemCheck.At(1))
 	click(hitSnippetBatchMove)
 	if state.modal != modalSnippetMoveGroup {
 		t.Fatalf("batch move opened modal %d", state.modal)

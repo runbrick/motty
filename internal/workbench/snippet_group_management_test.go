@@ -372,14 +372,23 @@ func TestSnippetMultiSelectGroupSelectionBatchMoveAndBatchDelete(t *testing.T) {
 		t.Fatal("multi-select mode did not activate")
 	}
 
-	// Clicking the Ops folder checkbox selects both Ops and Ops/Web snippets.
+	// Clicking the Ops folder checkbox selects both Ops and Ops/Web groups and their snippets.
 	opsToken := state.snippetTreeFolderToken("ops")
 	state.Click(hitSnippetMultiFolderCheck.At(opsToken))
 	if got := state.snippets.selectedSnippetIndices(); !slices.Equal(got, []int{0, 1}) {
 		t.Fatalf("selected after clicking Ops group = %v, want [0 1]", got)
 	}
 
-	// Batch move selected snippets to root (ungrouped).
+	// Batch move is disabled while groups are selected (only commands can be batch-moved).
+	state.Click(hitSnippetBatchMove)
+	if state.modal != modalNone {
+		t.Fatalf("batch move opened modal %d while groups were selected, want modalNone", state.modal)
+	}
+
+	// Uncheck Ops and select the two commands directly so batch move applies to commands only.
+	state.Click(hitSnippetMultiFolderCheck.At(opsToken))
+	state.Click(hitSnippetMultiItemCheck.At(0))
+	state.Click(hitSnippetMultiItemCheck.At(1))
 	state.Click(hitSnippetBatchMove)
 	if state.modal != modalSnippetMoveGroup {
 		t.Fatalf("batch move opened modal %d", state.modal)
@@ -394,7 +403,9 @@ func TestSnippetMultiSelectGroupSelectionBatchMoveAndBatchDelete(t *testing.T) {
 		t.Fatalf("emptied groups disappeared after batch move: %v", state.snippets.groups)
 	}
 
-	// Batch delete removes the selected snippets AND the selected Ops + Ops/Web groups.
+	// Re-select Ops (which also selects Ops/Web) alongside the already-selected commands,
+	// then batch delete removes both the selected snippets AND the selected Ops + Ops/Web groups.
+	state.Click(hitSnippetMultiFolderCheck.At(opsToken))
 	state.Click(hitSnippetBatchDelete)
 	if state.modal != modalSnippetDelete || len(state.snippets.deletingBatch) != 2 || len(state.snippets.deletingGroups) != 2 {
 		t.Fatalf("batch delete opened modal=%d batch=%v groups=%v", state.modal, state.snippets.deletingBatch, state.snippets.deletingGroups)
